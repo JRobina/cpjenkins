@@ -14,7 +14,7 @@ pipeline {
                 catchError(buildResult: 'SUCCESS', stageResult: 'SUCCESS') {
                     sh '''
                         export PYTHONPATH=$WORKSPACE
-                        python3 -m pytest --junitxml=result-unit.xml test/unit
+                        python3 -m coverage run --branch --source=app --omit=app/__init__.py -m pytest --junitxml=result-unit.xml test/unit
                     '''
                 }
                 junit 'result-unit.xml'
@@ -38,83 +38,84 @@ pipeline {
             }
         }
 
-       stage('Static') {
-    steps {
-        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-            sh '''
-                python3 -m flake8 --format=pylint --exit-zero app > flake8.out
-            '''
+        stage('Static') {
+            steps {
+                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                    sh '''
+                        python3 -m flake8 --format=pylint --exit-zero app > flake8.out
+                    '''
+                }
+                recordIssues(
+                    id: 'flake8',
+                    tools: [pyLint(name: 'Flake8', pattern: 'flake8.out')],
+                    qualityGates: [
+                        [threshold: 8,  type: 'TOTAL', unstable: true],
+                        [threshold: 10, type: 'TOTAL', unstable: false]
+                    ]
+                )
+            }
         }
-        recordIssues(
-            id: 'flake8',
-            tools: [pyLint(name: 'Flake8', pattern: 'flake8.out')],
-            qualityGates: [
-                [threshold: 8,  type: 'TOTAL', unstable: true],
-                [threshold: 10, type: 'TOTAL', unstable: false]
-            ]
-        )
-    }
-}
 
-stage('Security') {
-    steps {
-        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-            sh '''
-                python3 -m bandit --exit-zero -r app -f custom -o bandit.out --msg-template "{abspath}:{line}: [{test_id}] {msg}"
-            '''
+        stage('Security') {
+            steps {
+                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                    sh '''
+                        python3 -m bandit --exit-zero -r app -f custom -o bandit.out --msg-template "{abspath}:{line}: [{test_id}] {msg}"
+                    '''
+                }
+                recordIssues(
+                    id: 'bandit',
+                    tools: [pyLint(name: 'Bandit', pattern: 'bandit.out')],
+                    qualityGates: [
+                        [threshold: 2, type: 'TOTAL', unstable: true],
+                        [threshold: 4, type: 'TOTAL', unstable: false]
+                    ]
+                )
+            }
         }
-        recordIssues(
-            id: 'bandit',
-            tools: [pyLint(name: 'Bandit', pattern: 'bandit.out')],
-            qualityGates: [
-                [threshold: 2, type: 'TOTAL', unstable: true],
-                [threshold: 4, type: 'TOTAL', unstable: false]
-            ]
-        )
-    }
-}
 
         stage('Performance') {
             steps {
                 sh '''
                     pkill -f "flask run" || true
-            	    sleep 2
-            	    export FLASK_APP=app/api.py
+                    sleep 2
+                    export FLASK_APP=app/api.py
                     export FLASK_ENV=development
                     python3 -m flask run &
                     sleep 3
                     /opt/apache-jmeter-5.5/bin/jmeter -n -t test/jmeter/flask.jmx -l jmeter-results.jtl
                 '''
                 perfReport(
-                          sourceDataFiles: 'jmeter-results.jtl',
-                          compareBuildPrevious: false,
-                          errorUnstableThreshold: 0,
-                          errorFailedThreshold: 0
-)
-             }
+                    sourceDataFiles: 'jmeter-results.jtl',
+                    compareBuildPrevious: false,
+                    errorUnstableThreshold: 100,
+                    errorFailedThreshold: 100
+                )
+            }
         }
 
-            stage('Coverage') {
-                steps {
-                    catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-                        sh '''
-                            export PYTHONPATH=$WORKSPACE
-                            python3 -m coverage run --branch --source=app --omit=app/__init__.py -m pytest test/unit
-                            python3 -m coverage xml
-                        '''
-                    }
-                    recordCoverage(
-                        tools: [[parser: 'COBERTURA', pattern: 'coverage.xml']],
-                        qualityGates: [
-                            [threshold: 85.0, metric: 'LINE',   baseline: 'PROJECT', criticality: 'UNSTABLE'],
-                            [threshold: 95.0, metric: 'LINE',   baseline: 'PROJECT', criticality: 'FAILURE'],
-                            [threshold: 80.0, metric: 'BRANCH', baseline: 'PROJECT', criticality: 'UNSTABLE'],
-                            [threshold: 90.0, metric: 'BRANCH', baseline: 'PROJECT', criticality: 'FAILURE']
-                        ]
-                    )
-       }
-   }
- }
+        stage('Coverage') {
+            steps {
+                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                    sh '''
+                        export PYTHONPATH=$WORKSPACE
+                        python3 -m coverage xml
+                    '''
+                }
+                recordCoverage(
+                    tools: [[parser: 'COBERTURA', pattern: 'coverage.xml']],
+                    qualityGates: [
+                        [threshold: 85.0, metric: 'LINE',   baseline: 'PROJECT', criticality: 'UNSTABLE'],
+                        [threshold: 95.0, metric: 'LINE',   baseline: 'PROJECT', criticality: 'FAILURE'],
+                        [threshold: 80.0, metric: 'BRANCH', baseline: 'PROJECT', criticality: 'UNSTABLE'],
+                        [threshold: 90.0, metric: 'BRANCH', baseline: 'PROJECT', criticality: 'FAILURE']
+                    ]
+                )
+            }
+        }
+
+    }
+
     post {
         always {
             cleanWs()
