@@ -9,17 +9,17 @@ pipeline {
             }
         }
 
-        stage('Unit') {
-            steps {
-                catchError(buildResult: 'SUCCESS', stageResult: 'SUCCESS') {
-                    sh '''
-                        export PYTHONPATH=$WORKSPACE
-                        python3 -m pytest --junitxml=result-unit.xml test/unit
-                    '''
-                }
-                junit 'result-unit.xml'
-            }
-        }
+       stage('Unit') {
+           steps {
+               catchError(buildResult: 'SUCCESS', stageResult: 'SUCCESS') {
+                   sh '''
+                       export PYTHONPATH=$WORKSPACE
+                       python3 -m coverage run --branch --source=app --omit=app/__init__.py -m pytest --junitxml=result-unit.xml test/unit
+                   '''
+               }
+               junit 'result-unit.xml'
+           }
+     }
 
         stage('Rest') {
             steps {
@@ -87,27 +87,26 @@ pipeline {
              }
         }
 
-       stage('Coverage') {
-           steps {
-               catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-                  sh '''
-                      export PYTHONPATH=$WORKSPACE
-                      python3 -m coverage run --branch --source=app --omit=app/__init__.py -m pytest test/unit
-                      python3 -m coverage xml
-                  '''
-               }
-               recordCoverage(
-                   tools: [[parser: 'COBERTURA', pattern: 'coverage.xml']],
-                   qualityGates: [
-                       [threshold: 85.0, metric: 'LINE',   baseline: 'PROJECT', criticality: 'UNSTABLE'],
-                       [threshold: 95.0, metric: 'LINE',   baseline: 'PROJECT', criticality: 'FAILURE'],
-                       [threshold: 80.0, metric: 'BRANCH', baseline: 'PROJECT', criticality: 'UNSTABLE'],
-                       [threshold: 90.0, metric: 'BRANCH', baseline: 'PROJECT', criticality: 'FAILURE']
-                   ]
-              )
-       }
-   }
- }
+        stage('Coverage') {
+            steps {
+                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                     sh '''
+                         export PYTHONPATH=$WORKSPACE
+                         python3 -m coverage xml
+                     '''
+                }
+                recordCoverage(
+                     tools: [[parser: 'COBERTURA', pattern: 'coverage.xml']],
+                     qualityGates: [
+                        [threshold: 85.0, metric: 'LINE',   baseline: 'PROJECT', criticality: 'UNSTABLE'],
+                        [threshold: 95.0, metric: 'LINE',   baseline: 'PROJECT', criticality: 'FAILURE'],
+                        [threshold: 80.0, metric: 'BRANCH', baseline: 'PROJECT', criticality: 'UNSTABLE'],
+                        [threshold: 90.0, metric: 'BRANCH', baseline: 'PROJECT', criticality: 'FAILURE']
+                    ]
+                )
+           }
+    }
+        }
     post {
         always {
             cleanWs()
