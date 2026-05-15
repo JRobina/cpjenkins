@@ -1,0 +1,159 @@
+pipeline {
+    agent none
+
+    stages {
+
+        stage('Get Code') {
+            agent { label 'built-in' }
+            steps {
+                sh 'whoami && hostname && echo ${WORKSPACE}'
+                git 'https://github.com/JRobina/cpjenkins.git'
+                stash name: 'codigo', includes: '**/*'
+            }
+        }
+
+        stage('Tests A') {
+            agent { label 'python-agent' }
+            stages {
+
+                stage('Unit') {
+                    steps {
+                        sh 'whoami && hostname && echo ${WORKSPACE}'
+                        unstash 'codigo'
+                        catchError(buildResult: 'SUCCESS', stageResult: 'SUCCESS') {
+                            sh '''
+                                export PYTHONPATH=$WORKSPACE
+                                python3 -m coverage run --branch --source=app --omit=app/__init__.py -m pytest --junitxml=result-unit.xml test/unit
+                            '''
+                        }
+                        junit 'result-unit.xml'
+                        stash name: 'coverage-data', includes: '.coverage'
+                    }
+                }
+
+                stage('Coverage') {
+                    steps {
+                        sh 'whoami && hostname && echo ${WORKSPACE}'
+                        unstash 'coverage-data'
+                        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                            sh '''
+                                export PYTHONPATH=$WORKSPACE
+                                python3 -m coverage xml
+                            '''
+                        }
+                        recordCoverage(
+                            tools: [[parser: 'COBERTURA', pattern: 'coverage.xml']],
+                            qualityGates: [
+                                [threshold: 85.0, metric: 'LINE',   baseline: 'PROJECT', criticality: 'UNSTABLE'],
+                                [threshold: 95.0, metric: 'LINE',   baseline: 'PROJECT', criticality: 'UNSTABLE'],
+                                [threshold: 80.0, metric: 'BRANCH', baseline: 'PROJECT', criticality: 'UNSTABLE'],
+                                [threshold: 90.0, metric: 'BRANCH', baseline: 'PROJECT', criticality: 'UNSTABLE']
+                            ]
+                        )
+                    }
+                }
+            }
+        }
+
+        stage('Tests B') {
+            agent { label 'python-agent2' }
+            stages {
+
+                stage('Parallel Tests') {
+                    parallel {
+
+                        stage('Rest') {
+                            steps {
+                                sh 'whoami && hostname && echo ${WORKSPACE}'
+                                unstash 'codigo'
+                                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE') {
+                                    sh '''
+                                        export FLASK_APP=app/api.py
+                                        export FLASK_ENV=development
+                                        python3 -m flask run &
+                                        java -jar /opt/wiremock/wiremock-jre8-standalone-2.28.0.jar --port 9090 --root-dir test/wiremock &
+                                        sleep 5
+                                        export PYTHONPATH=$WORKSPACE
+                                        python3 -m pytest --junitxml=result-rest.xml test/rest
+                                    '''
+                                }
+                                junit 'result-rest.xml'
+                            }
+                        }
+
+                        stage('Static') {
+                            steps {
+                                sh 'whoami && hostname && echo ${WORKSPACE}'
+                                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                                    sh '''
+                                        python3 -m flake8 --format=pylint --exit-zero app > flake8.out
+                                    '''
+                                }
+                                recordIssues(
+                                    id: 'flake8',
+                                    tools: [pyLint(name: 'Flake8', pattern: 'flake8.out')],
+                                    qualityGates: [
+                                        [threshold: 8,  type: 'TOTAL', unstable: true],
+                                        [threshold: 10, type: 'TOTAL', unstable: false]
+                                    ]
+                                )
+                            }
+                        }
+
+                        stage('Security') {
+                            steps {
+                                sh 'whoami && hostname && echo ${WORKSPACE}'
+                                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                                    sh '''
+                                        python3 -m bandit --exit-zero -r app -f custom -o bandit.out --msg-template "{abspath}:{line}: [{test_id}] {msg}"
+                                    '''
+                                }
+                                recordIssues(
+                                    id: 'bandit',
+                                    tools: [pyLint(name: 'Bandit', pattern: 'bandit.out')],
+                                    qualityGates: [
+                                        [threshold: 2, type: 'TOTAL', unstable: true],
+                                        [threshold: 4, type: 'TOTAL', unstable: false]
+                                    ]
+                                )
+                            }
+                        }
+
+                    }
+                }
+
+                stage('Performance') {
+                    steps {
+                        sh 'whoami && hostname && echo ${WORKSPACE}'
+                        sh '''
+                            pkill -f "flask run" || true
+                            sleep 2
+                            export FLASK_APP=app/api.py
+                            export FLASK_ENV=development
+                            python3 -m flask run &
+                            sleep 3
+                            /opt/apache-jmeter-5.5/bin/jmeter -n -t test/jmeter/flask.jmx -l jmeter-results.jtl
+                        '''
+                        perfReport(
+                            sourceDataFiles: 'jmeter-results.jtl',
+                            compareBuildPrevious: false,
+                            errorUnstableThreshold: 100,
+                            errorFailedThreshold: 100,
+                            failBuildIfNoResultFile: false,
+                            modePerformancePerTestCase: false
+                        )
+                    }
+                }
+            }
+        }
+
+    }
+
+    post {
+        always {
+            node('built-in')      { cleanWs() }
+            node('python-agent')  { cleanWs() }
+            node('python-agent2') { cleanWs() }
+        }
+    }
+}
