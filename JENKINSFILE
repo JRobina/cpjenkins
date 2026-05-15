@@ -5,7 +5,7 @@ pipeline {
 
         stage('Get Code') {
             steps {
-                git 'https://github.com/JRobina/cpjenkins.git'
+                checkout scm
             }
         }
 
